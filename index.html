@@ -466,6 +466,84 @@
     <!-- TOAST CONTAINER -->
     <div id="toast-container" class="fixed bottom-8 right-8 flex flex-col gap-y-2 z-[10000]"></div>
 
+    <!-- AI SUGGEST MODAL -->
+    <div onclick="if(event.target.id==='ai-modal')hideAIModal()"
+         id="ai-modal"
+         class="hidden fixed inset-0 bg-black/80 flex items-center justify-center z-[9999]">
+        <div onclick="event.stopImmediatePropagation()"
+             class="modal glass border border-purple-400/30 w-full max-w-2xl mx-4 rounded-3xl p-8 shadow-2xl shadow-purple-500/20">
+            
+            <!-- Header -->
+            <div class="flex justify-between items-center mb-6">
+                <div class="flex items-center gap-x-3">
+                    <div class="w-10 h-10 bg-gradient-to-br from-purple-500 to-cyan-400 rounded-2xl flex items-center justify-center text-xl">⚡</div>
+                    <div>
+                        <h2 class="text-xl font-semibold bg-gradient-to-r from-purple-400 to-cyan-400 bg-clip-text text-transparent">AI Priority Advisor</h2>
+                        <p class="text-xs text-white/50">Powered by Claude AI</p>
+                    </div>
+                </div>
+                <button onclick="hideAIModal()" class="text-white/60 hover:text-white text-xl">✕</button>
+            </div>
+
+            <!-- Task selector -->
+            <div class="mb-5">
+                <label class="block text-xs font-medium tracking-widest text-white/60 mb-2">SELECT A TASK TO ANALYSE</label>
+                <select id="ai-task-select"
+                        class="w-full glass border border-white/20 focus:border-purple-400 rounded-2xl px-5 py-3 outline-none text-sm">
+                    <option value="">— Choose a task —</option>
+                </select>
+            </div>
+
+            <!-- Optional context -->
+            <div class="mb-6">
+                <label class="block text-xs font-medium tracking-widest text-white/60 mb-2">EXTRA CONTEXT <span class="normal-case font-normal">(optional)</span></label>
+                <textarea id="ai-extra-context" rows="2" placeholder="e.g. We have a board presentation on Friday…"
+                          class="w-full glass border border-white/20 focus:border-purple-400 rounded-2xl px-5 py-3 outline-none text-sm resize-none"></textarea>
+            </div>
+
+            <!-- Analyse button -->
+            <button onclick="runAIAnalysis()"
+                    id="ai-run-btn"
+                    class="w-full py-3 bg-gradient-to-r from-purple-500 to-cyan-400 hover:from-purple-600 hover:to-cyan-500 rounded-2xl font-semibold text-sm flex items-center justify-center gap-x-2 mb-6">
+                <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                    <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 10V3L4 14h7v7l9-11h-7z"/>
+                </svg>
+                Analyse with Claude AI
+            </button>
+
+            <!-- Result area -->
+            <div id="ai-result-area" class="hidden">
+                <div class="border-t border-white/10 pt-5">
+                    <!-- Priority badge -->
+                    <div class="flex items-center gap-x-3 mb-4">
+                        <span class="text-xs font-medium tracking-widest text-white/50">SUGGESTED PRIORITY</span>
+                        <span id="ai-priority-badge" class="px-4 py-1 rounded-full text-xs font-bold"></span>
+                    </div>
+                    <!-- AI response -->
+                    <div id="ai-response-text"
+                         class="glass border border-white/10 rounded-2xl px-5 py-4 text-sm text-white/80 leading-relaxed whitespace-pre-wrap"></div>
+                    <!-- Apply button -->
+                    <div class="flex justify-end mt-4">
+                        <button onclick="applyAIPriority()"
+                                id="ai-apply-btn"
+                                class="px-8 py-3 bg-gradient-to-r from-cyan-400 to-purple-600 rounded-2xl font-semibold text-sm flex items-center gap-x-2">
+                            Apply Priority to Task
+                            <svg xmlns="http://www.w3.org/2000/svg" class="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M5 13l4 4L19 7"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Loading state -->
+            <div id="ai-loading" class="hidden text-center py-6">
+                <div class="inline-block w-8 h-8 border-2 border-purple-400 border-t-transparent rounded-full animate-spin mb-3"></div>
+                <p class="text-sm text-white/60">Claude is thinking…</p>
+            </div>
+        </div>
+    </div>
+
     <!-- SCRIPT -->
     <script>
         /**
@@ -1503,16 +1581,145 @@
             }, 2800)
         }
         
-        // AI Suggest (fun fake)
+        // ─── REAL AI SUGGEST (Claude API) ────────────────────────────────────────
+
+        let aiSuggestedPriority = null   // stores the priority the AI picks
+
         function showAISuggest() {
-            const messages = [
-                "Based on urgency, I suggest HIGH priority 🔥",
-                "Looks like a medium effort task → MEDIUM",
-                "Low impact, schedule for next sprint → LOW"
-            ]
-            const random = messages[Math.floor(Math.random() * messages.length)]
-            showToast(random, 'success')
-            // Could also open modal but toast is enough for contest
+            // Populate the task dropdown with current tasks
+            const sel = document.getElementById('ai-task-select')
+            sel.innerHTML = '<option value="">— Choose a task —</option>'
+            tasks.forEach(t => {
+                const opt = document.createElement('option')
+                opt.value = t.id
+                opt.textContent = `[${t.priority.toUpperCase()}] ${t.title}`
+                sel.appendChild(opt)
+            })
+
+            // Reset result UI
+            document.getElementById('ai-result-area').classList.add('hidden')
+            document.getElementById('ai-loading').classList.add('hidden')
+            document.getElementById('ai-extra-context').value = ''
+            aiSuggestedPriority = null
+
+            document.getElementById('ai-modal').classList.remove('hidden')
+        }
+
+        function hideAIModal() {
+            document.getElementById('ai-modal').classList.add('hidden')
+        }
+
+        async function runAIAnalysis() {
+            const taskId = parseInt(document.getElementById('ai-task-select').value)
+            if (!taskId) { showToast('Please select a task first', 'error'); return }
+
+            const task = tasks.find(t => t.id === taskId)
+            if (!task) return
+
+            const extraContext = document.getElementById('ai-extra-context').value.trim()
+
+            // Build a rich prompt with all task context
+            const overdueTasks = tasks.filter(t => t.dueDate && new Date(t.dueDate) < new Date() && t.status !== 'completed').length
+            const highCount    = tasks.filter(t => t.priority === 'high' && t.status !== 'completed').length
+            const totalOpen    = tasks.filter(t => t.status !== 'completed').length
+
+            const prompt = `You are an expert project manager AI assistant. Analyse the following task and recommend the best priority level (HIGH, MEDIUM, or LOW).
+
+TASK DETAILS:
+- Title: ${task.title}
+- Description: ${task.description || 'No description provided'}
+- Current priority: ${task.priority.toUpperCase()}
+- Status: ${task.status}
+- Due date: ${task.dueDate || 'Not set'}
+- Assigned to: ${task.assignees.length} team member(s)
+- Comments: ${task.comments.length}
+
+TEAM WORKLOAD SNAPSHOT:
+- Total open tasks: ${totalOpen}
+- High-priority open tasks: ${highCount}
+- Overdue tasks (excl. completed): ${overdueTasks}
+
+${extraContext ? `EXTRA CONTEXT PROVIDED:\n${extraContext}\n` : ''}
+
+Respond with:
+1. Your recommended priority: HIGH, MEDIUM, or LOW (put it on the very first line as: PRIORITY: <value>)
+2. A clear, concise explanation (3-5 sentences) of why you chose that priority, considering the task details, due date, and team workload.`
+
+            // Show loading
+            document.getElementById('ai-result-area').classList.add('hidden')
+            document.getElementById('ai-loading').classList.remove('hidden')
+            document.getElementById('ai-run-btn').disabled = true
+            document.getElementById('ai-run-btn').classList.add('opacity-50')
+
+            try {
+                const response = await fetch('https://api.anthropic.com/v1/messages', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        model: 'claude-sonnet-4-20250514',
+                        max_tokens: 1000,
+                        messages: [{ role: 'user', content: prompt }]
+                    })
+                })
+
+                const data = await response.json()
+                const fullText = data.content.map(b => b.text || '').join('')
+
+                // Parse priority from first line
+                const firstLine = fullText.split('\n')[0] || ''
+                const match = firstLine.match(/PRIORITY:\s*(HIGH|MEDIUM|LOW)/i)
+                const priority = match ? match[1].toLowerCase() : null
+                aiSuggestedPriority = priority
+
+                // Strip the PRIORITY line from the display text
+                const explanation = fullText.replace(/^PRIORITY:.*\n?/i, '').trim()
+
+                // Render result
+                const badge = document.getElementById('ai-priority-badge')
+                badge.textContent = priority ? priority.toUpperCase() : '?'
+                badge.className = 'px-4 py-1 rounded-full text-xs font-bold ' + (
+                    priority === 'high'   ? 'bg-red-500/20 text-red-400 border border-red-400/40' :
+                    priority === 'medium' ? 'bg-yellow-500/20 text-yellow-400 border border-yellow-400/40' :
+                    priority === 'low'    ? 'bg-cyan-500/20 text-cyan-400 border border-cyan-400/40' :
+                                           'bg-white/10 text-white/60'
+                )
+
+                document.getElementById('ai-response-text').textContent = explanation
+
+                // Show/hide apply button
+                const applyBtn = document.getElementById('ai-apply-btn')
+                if (priority && priority !== task.priority) {
+                    applyBtn.classList.remove('hidden')
+                    applyBtn.dataset.taskId = taskId
+                } else {
+                    applyBtn.classList.add('hidden')
+                }
+
+                document.getElementById('ai-loading').classList.add('hidden')
+                document.getElementById('ai-result-area').classList.remove('hidden')
+
+            } catch (err) {
+                document.getElementById('ai-loading').classList.add('hidden')
+                showToast('AI request failed. Check your connection.', 'error')
+                console.error(err)
+            } finally {
+                document.getElementById('ai-run-btn').disabled = false
+                document.getElementById('ai-run-btn').classList.remove('opacity-50')
+            }
+        }
+
+        function applyAIPriority() {
+            const taskId = parseInt(document.getElementById('ai-apply-btn').dataset.taskId)
+            if (!taskId || !aiSuggestedPriority) return
+            const task = tasks.find(t => t.id === taskId)
+            if (!task) return
+            const oldPriority = task.priority
+            task.priority = aiSuggestedPriority
+            saveData()
+            renderMain()
+            hideAIModal()
+            logActivity(`AI changed "${task.title}" priority from ${oldPriority} → ${aiSuggestedPriority}`)
+            showToast(`✅ Priority updated to ${aiSuggestedPriority.toUpperCase()} by AI`, 'success')
         }
         
         // Export JSON
